@@ -391,6 +391,69 @@ TEST(Operator, Operator_Select_Test0) {
   ASSERT_EQ(select->description, "This operator implements the meta op 'Select'.");
 }
 
+TEST(Operator, Operator_Flip_Test0) {
+  auto flip  = Operator::Get("flip");
+  Operator temp = *flip;
+  auto strategy = Operator::GetAttrs<StrategyFunction>("CINNStrategy");
+
+  int c = 16, h = 64, w = 64;
+  Expr C(c), H(h), W(w);
+  Placeholder<float> A("A", {C, H, W});
+
+  NodeAttr attrs;
+  int  axis    = 1;
+  attrs.attr_store["axis"] = axis;
+  std::vector<ir::Tensor> inputs{A.tensor()};
+  std::vector<Type> type{Float(32)};
+  common::Target target = common::DefaultHostTarget();
+
+  auto impl = OpStrategy::SelectImpl(strategy[flip](attrs, inputs, type, {{c, h, w}}, target));
+  common::CINNValuePack cinn_input = common::CINNValuePack{{common::CINNValue(A)}};
+  common::CINNValuePack rets       = impl->fcompute(cinn_input);
+  rets                             = impl->fschedule(rets);
+  ASSERT_EQ(rets.size(), 2UL);
+
+  // the last element is a StageMap
+  for (int i = 0; i < rets->size() - 1; i++) {
+    Expr temp = rets[i];
+    inputs.push_back(temp.as_tensor_ref());
+  }
+  auto func = Lower("flip", rets.back(), inputs);
+  LOG(INFO) << "Test Strategy Codegen:\n" << func;
+
+  Module::Builder builder("module0", target);
+  builder.AddFunction(func);
+  auto jit    = backends::ExecutionEngine::Create({});
+  auto module = builder.Build();
+
+  jit->Link(module);
+  auto fn = jit->Lookup("flip");
+  CHECK(fn);
+  auto fn_ = reinterpret_cast<void (*)(void *, int32_t)>(fn);
+
+  cinn_buffer_t *A_buf = common::BufferBuilder(Float(32), {c, h, w}).set_random().Build();
+  cinn_buffer_t *B_buf = common::BufferBuilder(Float(32), {c, h, w}).set_random().Build();
+  cinn_pod_value_t a_arg(A_buf), b_arg(B_buf);
+  cinn_pod_value_t args[] = {a_arg, b_arg};
+  fn_(args, 2);
+
+  auto input  = reinterpret_cast<float *>(A_buf->memory);
+  auto output = reinterpret_cast<float *>(B_buf->memory);
+
+  for (int ida = 0; ida < c; ++ida) {
+    for (int idb = 0; idb < h; ++idb) {
+      for (int idc = 0; idc < w; ++idc) {
+        int index  = ida * h * w + idb * h + idc;
+        int index_ = ida * h * w + (h - 1 - idb) * h + (w - 1 - idc);
+        ASSERT_EQ(output[index], input[index_]);
+      }
+    }
+  }
+
+  ASSERT_EQ(impl->name, "strategy.flip.x86");
+  ASSERT_EQ(flip->description, "This operator implements the meta op flip.");
+}
+
 TEST(Operator, Operator_Reverse_Test0) {
   auto reverse  = Operator::Get("reverse");
   Operator temp = *reverse;

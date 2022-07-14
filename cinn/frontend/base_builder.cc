@@ -280,6 +280,14 @@ Variable BaseBuilder::Reverse(const Variable& operand, const std::vector<int>& a
   return instr.GetOutput(0);
 }
 
+Variable BaseBuilder::Flip(const Variable& operand, const int axis) {
+  Instruction instr("flip", {operand});
+  instr.SetAttr("axis", axis);
+  InferShape(instr);
+  AppendInstruction(instr);
+  return instr.GetOutput(0);
+}
+
 Variable BaseBuilder::Select(const Variable& condition, const Variable& true_value, const Variable& false_value) {
   Instruction instr("select", {condition, true_value, false_value});
   InferShape(instr);

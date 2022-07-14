@@ -1121,6 +1121,100 @@ std::vector<Type> InferDtypeForLayoutTransform(const std::vector<Type> &inputs_t
   return res;
 }
 
+std::shared_ptr<OpStrategy> StrategyForFlip(const framework::NodeAttr &attrs,
+                                               const std::vector<ir::Tensor> &inputs,
+                                               const std::vector<Type> &out_type,
+                                               const std::vector<std::vector<int>> &output_shapes,
+                                               const Target &target) {
+  // check output shape
+  CHECK(!output_shapes.empty() && !output_shapes[0].empty()) << "Output shape is empty! Please check.\n";
+  // get axis[0, n_dim)
+  int axis;
+  if (attrs.attr_store.find("axis") != attrs.attr_store.end()) {
+    axis = absl::get<int>(attrs.attr_store.at("axis"));
+      if (axis >= static_cast<int>(output_shapes[0].size()) || axis < -1 * static_cast<int>(output_shapes[0].size())) {
+        LOG(FATAL) << "axis is not in [0, n_dim), Please check.";
+      }
+      if (axis < 0) {
+        axis += output_shapes[0].size();
+      }
+    
+  } else {
+    LOG(FATAL) << "axis is not be set! Please check.";
+  }
+
+  framework::CINNCompute flip_compute([=](lang::Args args, lang::RetValue *ret) {
+    CHECK(!args.empty()) << "The input argument of f compute is empty! Please check.\n";
+    CINNValuePack a = args[0];
+    CHECK(!a.empty()) << "at least one input tensor for flip compute\n";
+    Expr A = a[0];
+    CHECK(A.as_tensor());
+    auto out    = pe::Flip(A.as_tensor_ref(), axis, UniqName("flip_output"));
+    auto stages = CreateStages({A.as_tensor_ref(), out});
+    *ret        = CINNValuePack{{CINNValue(out), CINNValue(stages)}};
+  });
+
+  framework::CINNSchedule flip_schedule([=](lang::Args args, lang::RetValue *ret) {
+    CHECK(!args.empty()) << "The input argument of flip schedule is empty! Please check.\n";
+    CINNValuePack arg_pack = args[0];
+    CHECK_EQ(arg_pack.size(), 2UL);
+    Expr out              = arg_pack[0];
+    poly::StageMap stages = arg_pack[1];
+    CHECK(out.as_tensor());
+    if (target.arch == Target::Arch::NVGPU) {
+      pe::CudaScheduleInjective(stages[out.as_tensor_ref()], output_shapes[0], target);
+    } else if (target.arch == Target::Arch::X86) {
+      pe::ScheduleInjectiveCPU(stages[out.as_tensor_ref()], output_shapes[0], target);
+    }
+    *ret = arg_pack;
+  });
+
+  auto strategy = std::make_shared<framework::OpStrategy>();
+  CHECK(out_type.size()) << "Out_type of flip op is empty! Please check.";
+  if (out_type[0] == Float(32)) {
+    strategy->AddImpl(flip_compute, flip_schedule, "strategy.flip.x86", 1);
+  } else {
+    LOG(FATAL) << "flip op with dtype != float32 is not implemented yet!";
+  }
+  return strategy;
+}
+
+std::vector<framework::shape_t> InferShapeForFlip(const std::vector<framework::shape_t> &inputs_shape,
+                                                     const framework::AttrMapType &attrs) {
+  CHECK(!inputs_shape.empty() && !inputs_shape[0].empty()) << "The input's shape size is 0! Please check again.";
+  std::vector<framework::shape_t> res{inputs_shape[0]};
+  if (attrs.find("axis") != attrs.end()) {
+    auto axis = absl::get<int>(attrs.at("axis"));
+    if (axis >= static_cast<int>(inputs_shape[0].size()) || axis < -1 * static_cast<int>(inputs_shape[0].size())) {
+      LOG(FATAL) << "axis is not in [-n_dim, n_dim), Please check.";
+    }
+    if (axis < 0) {
+      axis += inputs_shape[0].size();
+    }
+  
+  } else {
+    LOG(FATAL) << "axis is not be set! Please check.";
+  }
+  return res;
+}
+
+std::vector<std::vector<std::string>> InferLayoutForFlip(const std::vector<framework::shape_t> &input_shapes,
+                                                            const std::vector<std::string> &input_layouts,
+                                                            const framework::NodeAttr &attrs,
+                                                            const Target &target) {
+  if (attrs.attr_store.find("axis") != attrs.attr_store.end()) {
+    auto axis = absl::get<int>(attrs.attr_store.at("axis"));
+    if (axis >= static_cast<int>(input_shapes[0].size()) || axis < -1 * static_cast<int>(input_shapes[0].size())) {
+      LOG(FATAL) << "axis is not in [-n_dim, n_dim), Please check.";
+    }
+  
+  } else {
+    LOG(FATAL) << "axis is not be set! Please check.";
+  }
+  CHECK_EQ(input_layouts.size(), 1U) << "The input's layout size is not 1! Please check again.";
+  return {input_layouts, input_layouts};
+}
+
 std::shared_ptr<OpStrategy> StrategyForReverse(const framework::NodeAttr &attrs,
                                                const std::vector<ir::Tensor> &inputs,
                                                const std::vector<Type> &out_type,
@@ -2035,6 +2129,19 @@ CINN_REGISTER_HELPER(transform_ops) {
       .set_attr("inferdtype", MakeOpFunction(cinn::hlir::op::InferDtypeForConcat))
 #ifndef CINN_WITH_CUDA
       .set_attr("inferlayout", MakeOpFunction(cinn::hlir::op::InferLayoutForConcat))
+#endif
+      .set_attr<cinn::hlir::framework::OpPatternKind>("OpPattern", cinn::hlir::framework::OpPatternKind::kInjective)
+      .set_support_level(4);
+
+  CINN_REGISTER_OP(flip)
+      .describe("This operator implements the meta op flip.")
+      .set_num_inputs(1)
+      .set_num_outputs(1)
+      .set_attr<cinn::hlir::framework::StrategyFunction>("CINNStrategy", cinn::hlir::op::StrategyForFlip)
+      .set_attr("infershape", MakeOpFunction(cinn::hlir::op::InferShapeForFlip))
+      .set_attr("inferdtype", MakeOpFunction(cinn::hlir::op::InferDtypeForReshape))
+#ifndef CINN_WITH_CUDA
+      .set_attr("inferlayout", MakeOpFunction(cinn::hlir::op::InferLayoutForFlip))
 #endif
       .set_attr<cinn::hlir::framework::OpPatternKind>("OpPattern", cinn::hlir::framework::OpPatternKind::kInjective)
       .set_support_level(4);

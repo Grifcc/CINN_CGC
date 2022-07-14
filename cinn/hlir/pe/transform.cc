@@ -165,6 +165,8 @@ ir::Tensor Squeeze(const ir::Tensor& A,
   return out;
 }
 
+
+
 ir::Tensor Squeeze(const ir::Tensor& A,
                    const std::string& name) {
   std::vector<Expr> new_expr_shape;
@@ -228,6 +230,7 @@ std::vector<ir::Tensor> Split(const ir::Tensor& A,
   }
   return res;
 }
+
 
 ir::Tensor Concat(const ir::Tensor& A, const ir::Tensor& B, int axis, const std::string& name) {
   if (axis < 0) axis += A->shape.size();
@@ -705,6 +708,20 @@ ir::Tensor LayoutTransform(const Tensor& input,
       },
       name);
   return {res};
+}
+
+ir::Tensor Flip(const ir::Tensor& input,int axis, const std::string& output_name) {
+
+  CHECK(axis >= 0 && axis < static_cast<int>(input->shape.size())) << "axis should be [0,n_dim)";
+  std::vector<Expr> shape = input->shape;
+  return lang::Compute(
+      input->shape,
+      [=](const std::vector<Expr>& indice) {
+        std::vector<Expr> indexs(indice.begin(), indice.end());
+        indexs[axis] = shape[axis] - Expr(1) - indexs[axis];
+        return input(indexs);
+      },
+      output_name);
 }
 
 ir::Tensor Reverse(const ir::Tensor& input, const std::vector<int>& axis, const std::string& output_name) {

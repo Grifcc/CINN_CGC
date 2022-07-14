@@ -136,6 +136,15 @@ ir::Tensor Reverse(const ir::Tensor& input,
                    const std::string& output_name = UniqName("T_Reverse_out"));
 
 /**
+ * @brief Perform meta op flip
+ * @param input The input tensor
+ * @param axis flip axis
+ * @param output_name the name of the output tensor
+ */
+ir::Tensor Flip(const ir::Tensor& input,
+                   int axis,
+                   const std::string& output_name = UniqName("T_Flip_out"));
+/**
  * @brief Perform meta op Transpose
  * @param input The input tensor
  * @param axis tranpsoe axis

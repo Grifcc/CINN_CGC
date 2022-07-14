@@ -107,6 +107,8 @@ class BaseBuilder {
    */
   Variable Reverse(const Variable& operand, const std::vector<int>& axis);
 
+  Variable Flip(const Variable& operand, const int axis);
+
   Variable Select(const Variable& condition, const Variable& true_value, const Variable& false_value);
 
   std::vector<Variable> Split(const Variable& operand, const std::vector<int>& num_or_sections, int axis = 0);
